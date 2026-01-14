@@ -15,13 +15,21 @@
 """
 Helper to recalibrate your device (robot or teleoperator).
 
-Example:
+Examples:
 
+Normal calibration:
 ```shell
 lerobot-calibrate \
-    --teleop.type=so100_leader \
-    --teleop.port=/dev/tty.usbmodem58760431551 \
-    --teleop.id=blue
+    --robot.type=so100_follower \
+    --robot.port=/dev/tty.usbmodem58760431541
+```
+
+Run diagnostics before calibration (recommended for troubleshooting):
+```shell
+lerobot-calibrate \
+    --robot.type=so100_follower \
+    --robot.port=/dev/tty.usbmodem58760431541 \
+    --diagnose
 ```
 """
 
@@ -62,6 +70,7 @@ from lerobot.utils.utils import init_logging
 class CalibrateConfig:
     teleop: TeleoperatorConfig | None = None
     robot: RobotConfig | None = None
+    diagnose: bool = False  # Run diagnostics instead of calibration
 
     def __post_init__(self):
         if bool(self.teleop) == bool(self.robot):
@@ -81,7 +90,40 @@ def calibrate(cfg: CalibrateConfig):
         device = make_teleoperator_from_config(cfg.device)
 
     device.connect(calibrate=False)
-    device.calibrate()
+
+    if cfg.diagnose:
+        # Run diagnostics instead of calibration
+        if not hasattr(device, "bus"):
+            logging.error("This device does not have a motor bus. Diagnostics are not supported.")
+            device.disconnect()
+            return
+
+        from lerobot.motors.diagnostics import diagnose_motor_bus
+
+        logging.info("\n" + "=" * 60)
+        logging.info("Running motor diagnostics...")
+        logging.info("=" * 60)
+
+        # Run diagnostics on all motors
+        results = diagnose_motor_bus(device.bus, interactive=True)
+
+        # Ask if user wants to proceed with calibration
+        all_healthy = all(r.healthy for r in results.values())
+        if all_healthy:
+            user_input = input(
+                "\n✓ Diagnostics passed! Would you like to proceed with calibration? (y/n): "
+            )
+            if user_input.strip().lower() == "y":
+                logging.info("Proceeding with calibration...")
+                device.calibrate()
+        else:
+            logging.error(
+                "\n✗ Diagnostics failed. Please fix the issues above before attempting calibration."
+            )
+    else:
+        # Normal calibration workflow
+        device.calibrate()
+
     device.disconnect()
 
 
